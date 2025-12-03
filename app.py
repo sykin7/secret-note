@@ -6,12 +6,14 @@ import time
 import os
 import json
 import re
+import random
 
 app = Flask(__name__)
 DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
 CREATION_LIMITS = {}
 MESSAGE_LIMITS = {}
+MAX_PAYLOAD_SIZE = 50000 
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -35,6 +37,15 @@ def init_db():
     conn.close()
 
 init_db()
+
+def clean_zombies():
+    try:
+        conn = get_db()
+        now = datetime.datetime.now()
+        conn.execute('DELETE FROM secrets WHERE expire_at < ?', (now,))
+        conn.commit()
+        conn.close()
+    except: pass
 
 HTML_LAYOUT = """
 <!DOCTYPE html>
@@ -303,7 +314,8 @@ HTML_LAYOUT = """
                 const result = await encryptData(text, chatKey);
                 await fetch('/api/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, ciphertext: result.ciphertext, iv: result.iv, sender_id: myClientId }) });
             } catch(e) {
-                if(e.message && e.message.includes('429')) alert('说话太快了，请慢一点');
+                if(e.message && e.message.includes('413')) alert('内容太长，请分段发送');
+                else if(e.message && e.message.includes('429')) alert('说话太快了，请慢一点');
             }
         }
 
@@ -459,6 +471,7 @@ def chat_page(room_id): return render_template_string(HTML_LAYOUT)
 
 @app.route('/api/rooms')
 def list_rooms():
+    clean_zombies()
     conn = get_db()
     since = time.time() - 86400 
     rows = conn.execute('SELECT id, name, created_at, salt FROM rooms WHERE is_public = 1 AND created_at > ? ORDER BY created_at DESC', (since,)).fetchall()
@@ -467,6 +480,7 @@ def list_rooms():
 
 @app.route('/api/room/create_public', methods=['POST'])
 def create_public_room():
+    clean_zombies()
     data = request.json
     if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
     uid = str(uuid.uuid4()).replace('-', '')
@@ -478,10 +492,11 @@ def create_public_room():
 
 @app.route('/api/room/create_temp', methods=['POST'])
 def create_temp_room():
+    clean_zombies()
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     now = time.time()
     last = CREATION_LIMITS.get(ip, 0)
-    if now - last < 60: return jsonify({'error': '每个IP每分钟只能创建一个房间'}), 429
+    if now - last < 60: return jsonify({'error': '每分钟限建一个房间'}), 429
     CREATION_LIMITS[ip] = now
     
     uid = str(uuid.uuid4()).replace('-', '')
@@ -558,7 +573,10 @@ def poll_chat(room_id):
 
 @app.route('/api/note/create', methods=['POST'])
 def create_note_api():
+    clean_zombies()
     data = request.json
+    if len(data.get('ciphertext', '')) > MAX_PAYLOAD_SIZE: return jsonify({'error': '内容过长'}), 413
+    
     uid = str(uuid.uuid4()).replace('-', '')
     expire = datetime.datetime.now() + datetime.timedelta(hours=int(data.get('expire_hours', 24)))
     burn_mode = int(data.get('burn_mode', 1))
@@ -594,6 +612,8 @@ def send_chat():
     MESSAGE_LIMITS[ip] = now
     
     data = request.json
+    if len(data.get('ciphertext', '')) > MAX_PAYLOAD_SIZE: return jsonify({'error': '内容过长'}), 413
+    
     conn = get_db()
     conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), data.get('sender_id')))
     conn.commit()
