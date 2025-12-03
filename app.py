@@ -91,7 +91,7 @@ HTML_LAYOUT = """
             <button onclick="showNoteCreate()" class="btn btn-primary">✉️ 发送私密笔记</button>
             <button onclick="createChatRoom()" class="btn btn-success">💬以此设备创建聊天室</button>
             <div class="footer">
-                &copy; 2025 <a href="https://github.com/你的用户名/你的仓库名" target="_blank">加密传输系统</a>
+                &copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">加密传输系统</a>
             </div>
         </div>
     </div>
