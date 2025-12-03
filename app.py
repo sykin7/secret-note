@@ -5,10 +5,13 @@ import datetime
 import time
 import os
 import json
+import re
 
 app = Flask(__name__)
 DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
+CREATION_LIMITS = {}
+MESSAGE_LIMITS = {}
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -20,7 +23,6 @@ def init_db():
     conn.execute('''CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL, sender_id TEXT)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT, is_public INTEGER, salt TEXT, created_at REAL, owner_token TEXT, last_active REAL)''')
-    
     try: conn.execute('ALTER TABLE secrets ADD COLUMN burn_mode INTEGER DEFAULT 1')
     except: pass
     try: conn.execute('ALTER TABLE chat_messages ADD COLUMN sender_id TEXT')
@@ -29,7 +31,6 @@ def init_db():
     except: pass
     try: conn.execute('ALTER TABLE rooms ADD COLUMN last_active REAL')
     except: pass
-    
     conn.commit()
     conn.close()
 
@@ -80,6 +81,10 @@ HTML_LAYOUT = """
         .msg-bubble { max-width: 70%; padding: 10px 15px; border-radius: 12px; font-size: 15px; line-height: 1.5; word-wrap: break-word; position: relative; }
         .me .msg-bubble { background: var(--msg-me); color: white; border-bottom-right-radius: 2px; }
         .other .msg-bubble { background: var(--msg-other); color: #e2e8f0; border-bottom-left-radius: 2px; }
+        .media-placeholder { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; text-align: center; cursor: pointer; border: 1px dashed #64748b; transition: 0.2s; display: inline-block; width: 100%; box-sizing: border-box; }
+        .media-placeholder:hover { background: rgba(0,0,0,0.4); border-color: var(--primary); }
+        .msg-bubble img, .msg-bubble video { max-width: 100%; border-radius: 8px; margin-top: 5px; display: block; }
+        .msg-bubble a { color: #60a5fa; text-decoration: underline; }
         .system-msg { text-align: center; color: #64748b; font-size: 12px; margin: 10px 0; }
         #chat-input-area { padding: 15px; background: var(--panel); border-top: 1px solid #334155; display: flex; gap: 10px; }
         #chat-msg-input { margin: 0; height: 50px; }
@@ -96,11 +101,8 @@ HTML_LAYOUT = """
                 <button onclick="showNoteCreate()" class="btn btn-primary">✉️ 发送私密笔记</button>
                 <button onclick="createTempRoom()" class="btn btn-secondary">💬 临时私聊 (房主在线)</button>
             </div>
-            
             <h3>🔴 公开聊天大厅</h3>
-            <div id="room-list" class="room-list">
-                <div style="text-align:center; color:#64748b; padding:20px;">加载中...</div>
-            </div>
+            <div id="room-list" class="room-list"><div style="text-align:center; color:#64748b; padding:20px;">加载中...</div></div>
             <button onclick="showCreateRoomModal()" class="btn btn-success" style="width:100%; margin-top:10px;">➕ 创建公开房间 (管理员)</button>
             <button onclick="loadRooms()" class="btn btn-secondary btn-sm" style="width:100%; margin-top:10px;">↻ 刷新列表</button>
         </div>
@@ -110,7 +112,7 @@ HTML_LAYOUT = """
     <div id="create-room-modal" class="modal hidden">
         <div class="panel" style="width: 90%; max-width: 400px;">
             <h3>创建公开聊天室</h3>
-            <input type="text" id="new-room-name" placeholder="房间名称 (如: 周末派对)" maxlength="20">
+            <input type="text" id="new-room-name" placeholder="房间名称" maxlength="20">
             <input type="text" id="new-room-pass" placeholder="进房密码 (必填)" autocomplete="off">
             <div style="border-top:1px dashed #475569; margin:10px 0;"></div>
             <input type="password" id="admin-code" placeholder="管理员口令" autocomplete="off">
@@ -163,16 +165,14 @@ HTML_LAYOUT = """
         <div id="chat-header">
             <div id="chat-title" style="font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">🔒 加密聊天室</div>
             <div style="display:flex; gap:10px;">
-                <button id="copy-link-btn" onclick="copyRoomLink()" class="btn btn-success btn-sm" style="display:none;">🔗 复制邀请链接</button>
-                <button onclick="exitChat()" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:14px;">🚫 退出并销毁</button>
+                <button id="copy-link-btn" onclick="copyRoomLink()" class="btn btn-success btn-sm" style="display:none;">🔗 复制链接</button>
+                <button onclick="exitChat()" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:14px;">🚫 退出</button>
             </div>
         </div>
-        <div id="chat-box">
-            <div class="system-msg">正在连接...</div>
-        </div>
+        <div id="chat-box"><div class="system-msg">正在连接...</div></div>
         <div id="chat-input-area">
-            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="打开文件中转站">📂</button>
-            <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
+            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件/图片">📂</button>
+            <input type="text" id="chat-msg-input" placeholder="输入消息或图片链接..." onkeypress="if(event.keyCode==13) sendChatMsg()">
             <button onclick="sendChatMsg()" class="btn btn-primary" style="width:60px; margin:0;">发送</button>
         </div>
     </div>
@@ -223,9 +223,7 @@ HTML_LAYOUT = """
                 document.getElementById('home-view').classList.add('hidden');
                 document.getElementById('chat-view').classList.remove('hidden');
                 initChat();
-            } else {
-                loadRooms();
-            }
+            } else { loadRooms(); }
         };
 
         async function createTempRoom() {
@@ -233,6 +231,7 @@ HTML_LAYOUT = """
             const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
             const resp = await fetch('/api/room/create_temp', { method: 'POST' });
             const data = await resp.json();
+            if(data.error) return alert(data.error);
             sessionStorage.setItem('owner_token_' + data.id, data.owner_token);
             window.location.href = '/chat/' + data.id + '#' + JSON.stringify(exportedKey);
         }
@@ -245,16 +244,11 @@ HTML_LAYOUT = """
             if (ownerToken) {
                 document.getElementById('copy-link-btn').style.display = 'block'; 
                 heartbeatInterval = setInterval(() => {
-                    fetch('/api/room/heartbeat', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken })
-                    });
+                    fetch('/api/room/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken }) });
                 }, 3000);
             }
-
             if (!window.location.hash) {
-                const pass = prompt("这是一个加密房间，请输入密码:");
+                const pass = prompt("请输入密码:");
                 if(pass) {
                     const resp = await fetch('/api/room/info/' + chatRoomId);
                     const data = await resp.json();
@@ -267,10 +261,8 @@ HTML_LAYOUT = """
                     chatKey = await window.crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
                 } catch(e) { return appendChatMsg("密钥错误", "system-msg"); }
             }
-            
             appendChatMsg("已连接。消息5分钟销毁。", "system-msg");
-            if(ownerToken) appendChatMsg("【你是房主】你退出后房间将立即销毁。", "system-msg");
-            
+            if(ownerToken) appendChatMsg("【房主】页面关闭后房间将销毁。", "system-msg");
             setInterval(pollMessages, 1500);
         }
 
@@ -279,13 +271,7 @@ HTML_LAYOUT = """
             try {
                 const resp = await fetch(`/api/chat/poll/${chatRoomId}?last=${lastMsgTime}`);
                 const data = await resp.json();
-                
-                if (data.status === 'room_gone') {
-                    alert('房间已销毁 (房主已退出或超时)');
-                    window.location.href = '/';
-                    return;
-                }
-                
+                if (data.status === 'room_gone') { alert('房间已销毁'); window.location.href = '/'; return; }
                 for (const msg of data) {
                     if (msg.created_at > lastMsgTime) lastMsgTime = msg.created_at;
                     if (msg.sender_id === myClientId) continue; 
@@ -295,22 +281,17 @@ HTML_LAYOUT = """
         }
 
         async function exitChat() {
-            if(confirm("确定退出吗？如果你是房主，房间将立即销毁。")) {
+            if(confirm("确定退出吗？")) {
                 const ownerToken = sessionStorage.getItem('owner_token_' + chatRoomId);
                 if(ownerToken) {
-                    await fetch('/api/room/delete', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken })
-                    });
+                    await fetch('/api/room/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken }) });
                 }
                 window.location.href = '/';
             }
         }
 
         function copyRoomLink() {
-            const url = window.location.href;
-            navigator.clipboard.writeText(url).then(() => alert('邀请链接已复制！发送给好友即可开始聊天。'));
+            navigator.clipboard.writeText(window.location.href).then(() => alert('邀请链接已复制'));
         }
 
         async function sendChatMsg() {
@@ -321,15 +302,34 @@ HTML_LAYOUT = """
             try {
                 const result = await encryptData(text, chatKey);
                 await fetch('/api/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, ciphertext: result.ciphertext, iv: result.iv, sender_id: myClientId }) });
-            } catch(e) {}
+            } catch(e) {
+                if(e.message && e.message.includes('429')) alert('说话太快了，请慢一点');
+            }
         }
+
         function appendChatMsg(text, type) {
             const box = document.getElementById('chat-box');
             if (type === 'system-msg') {
                 const div = document.createElement('div'); div.className = 'system-msg'; div.innerText = text; box.appendChild(div);
             } else {
                 const row = document.createElement('div'); row.className = 'msg-row ' + type;
-                const bubble = document.createElement('div'); bubble.className = 'msg-bubble'; bubble.innerText = text; row.appendChild(bubble); box.appendChild(row);
+                const bubble = document.createElement('div'); bubble.className = 'msg-bubble';
+                
+                let safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                
+                const imgRegex = /(https?:\/\/[^"'\s]+\.(?:png|jpg|jpeg|gif|webp))/i;
+                const videoRegex = /(https?:\/\/[^"'\s]+\.(?:mp4|webm|ogg))/i;
+                const urlRegex = /(https?:\/\/[^"'\s]+)/g;
+
+                if (imgRegex.test(text)) {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<div class="media-placeholder" onclick="this.outerHTML=\'<img src=\\'$1\\'>\'">🖼️ 点击加载图片 (隐私保护)</div>');
+                } else if (videoRegex.test(text)) {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<div class="media-placeholder" onclick="this.outerHTML=\'<video controls src=\\'$1\\'></video>\'">▶️ 点击播放视频 (隐私保护)</div>');
+                } else {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+                }
+                
+                row.appendChild(bubble); box.appendChild(row);
             }
             box.scrollTop = box.scrollHeight;
         }
@@ -342,9 +342,8 @@ HTML_LAYOUT = """
                 listEl.innerHTML = '';
                 if (rooms.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:#64748b; padding:20px;">暂无公开房间</div>'; return; }
                 rooms.forEach(room => {
-                    const div = document.createElement('div');
-                    div.className = 'room-item';
-                    div.innerHTML = `<div class="room-info"><span class="room-name">${escapeHtml(room.name)}</span><span class="room-time">${new Date(room.created_at * 1000).toLocaleString()}</span></div><div style="display:flex; gap:5px;"><button class="btn btn-primary btn-sm" onclick="joinRoom('${room.id}', '${room.name}', '${room.salt}')">加入</button><button class="btn btn-danger btn-sm" style="padding:8px 10px;" title="管理员删除" onclick="deleteRoom('${room.id}')">×</button></div>`;
+                    const div = document.createElement('div'); div.className = 'room-item';
+                    div.innerHTML = `<div class="room-info"><span class="room-name">${escapeHtml(room.name)}</span><span class="room-time">${new Date(room.created_at * 1000).toLocaleString()}</span></div><div style="display:flex; gap:5px;"><button class="btn btn-primary btn-sm" onclick="joinRoom('${room.id}', '${room.name}', '${room.salt}')">加入</button><button class="btn btn-danger btn-sm" style="padding:8px 10px;" onclick="deleteRoom('${room.id}')">×</button></div>`;
                     listEl.appendChild(div);
                 });
             } catch (e) {}
@@ -479,6 +478,12 @@ def create_public_room():
 
 @app.route('/api/room/create_temp', methods=['POST'])
 def create_temp_room():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = time.time()
+    last = CREATION_LIMITS.get(ip, 0)
+    if now - last < 60: return jsonify({'error': '每个IP每分钟只能创建一个房间'}), 429
+    CREATION_LIMITS[ip] = now
+    
     uid = str(uuid.uuid4()).replace('-', '')
     owner_token = str(uuid.uuid4())
     conn = get_db()
@@ -582,6 +587,12 @@ def read_note_api(id):
 
 @app.route('/api/chat/send', methods=['POST'])
 def send_chat():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = time.time()
+    last = MESSAGE_LIMITS.get(ip, 0)
+    if now - last < 1.0: return jsonify({'error': '发送太快'}), 429
+    MESSAGE_LIMITS[ip] = now
+    
     data = request.json
     conn = get_db()
     conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), data.get('sender_id')))
