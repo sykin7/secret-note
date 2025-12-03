@@ -25,6 +25,7 @@ def get_db():
 def init_db():
     conn = get_db()
     conn.execute('PRAGMA journal_mode=WAL;')
+    conn.execute('PRAGMA auto_vacuum = FULL;')
     conn.execute('''CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL, sender_id TEXT)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT, is_public INTEGER, salt TEXT, created_at REAL, owner_token TEXT, last_active REAL)''')
