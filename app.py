@@ -27,10 +27,10 @@ PAGE_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Note</title>
+    <title>私密笔记</title>
     <style>
         :root { --bg: #121212; --card: #1e1e1e; --text: #e0e0e0; --accent: #3b82f6; --danger: #ef4444; }
-        body { background-color: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        body { background-color: var(--bg); color: var(--text); font-family: "PingFang SC", "Microsoft YaHei", sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
         .wrapper { background: var(--card); padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); width: 100%; max-width: 480px; box-sizing: border-box; }
         h2 { margin-top: 0; font-weight: 500; text-align: center; color: #fff; }
         textarea { width: 100%; height: 160px; background: #2d2d2d; color: #fff; border: 1px solid #404040; border-radius: 8px; padding: 12px; font-size: 16px; resize: none; outline: none; box-sizing: border-box; margin: 15px 0; }
@@ -43,45 +43,48 @@ PAGE_TEMPLATE = """
         .result-box { background: #2d2d2d; padding: 15px; border-radius: 8px; border: 1px dashed #555; word-break: break-all; font-family: monospace; color: var(--accent); margin-bottom: 20px; }
         .note { color: #888; font-size: 13px; text-align: center; margin-top: 15px; }
         footer { margin-top: 30px; text-align: center; font-size: 12px; color: #555; }
+        /* 链接样式：去掉下划线，鼠标悬停变色 */
+        footer a { color: #555; text-decoration: none; border-bottom: 1px dashed #444; transition: color 0.2s; }
+        footer a:hover { color: #888; border-bottom-color: #777; }
     </style>
 </head>
 <body>
     <div class="wrapper">
         {% if step == 'create' %}
-            <h2>Create New Note</h2>
+            <h2>创建私密笔记</h2>
             <form method="POST">
-                <textarea name="text" placeholder="Enter your private content here..." required></textarea>
-                <button type="submit" class="btn btn-primary">Generate Link</button>
+                <textarea name="text" placeholder="在此输入您的私密内容..." required></textarea>
+                <button type="submit" class="btn btn-primary">生成阅后即焚链接</button>
             </form>
-            <div class="note">Content will be permanently deleted after reading.</div>
+            <div class="note">注意：内容在被阅读一次后将立即永久销毁。</div>
         
         {% elif step == 'link' %}
-            <h2>Link Ready</h2>
-            <div class="note">Share this link securely:</div>
+            <h2>链接已生成</h2>
+            <div class="note">请复制下方链接发送给对方：</div>
             <div class="result-box">{{ url }}</div>
-            <a href="/" class="btn btn-secondary">Create Another</a>
+            <a href="/" class="btn btn-secondary">再写一条</a>
 
         {% elif step == 'confirm' %}
-            <h2 style="color: var(--danger)">Warning</h2>
-            <p style="text-align: center; line-height: 1.6;">You are about to view a secure note.<br>It will be <strong>permanently destroyed</strong> immediately after viewing.</p>
+            <h2 style="color: var(--danger)">⚠️ 警告</h2>
+            <p style="text-align: center; line-height: 1.6;">您即将查看一条私密笔记。<br>查看后，内容将从服务器<strong>立即永久删除</strong>。</p>
             <form method="POST" action="/read/{{ id }}">
-                <button type="submit" class="btn btn-danger">Yes, Show Me</button>
+                <button type="submit" class="btn btn-danger">立即查看并销毁</button>
             </form>
 
         {% elif step == 'view' %}
-            <h2>Private Content</h2>
+            <h2>笔记内容</h2>
             <textarea readonly>{{ content }}</textarea>
-            <div class="note">This note has been destroyed.</div>
-            <a href="/" class="btn btn-secondary">Home</a>
+            <div class="note">此笔记已销毁，无法再次查看。</div>
+            <a href="/" class="btn btn-secondary">返回首页</a>
 
         {% elif step == 'error' %}
-            <h2>Not Found</h2>
-            <p style="text-align: center; color: #888;">This note does not exist or has already been read.</p>
-            <a href="/" class="btn btn-secondary">Home</a>
+            <h2>未找到</h2>
+            <p style="text-align: center; color: #888;">该笔记不存在，或已经被阅读销毁。</p>
+            <a href="/" class="btn btn-secondary">返回首页</a>
         {% endif %}
 
         <footer>
-            &copy; 2025 kin. All rights reserved.
+            &copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">私密笔记系统</a> | 安全无痕
         </footer>
     </div>
 </body>
