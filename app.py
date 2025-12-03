@@ -67,6 +67,10 @@ def random_clean():
     if random.random() < 0.01:
         clean_zombies()
 
+def validate_str(val, max_len=1000, default=""):
+    if not isinstance(val, str): return default
+    return val[:max_len]
+
 HTML_LAYOUT = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -143,7 +147,7 @@ HTML_LAYOUT = """
     <div id="create-room-modal" class="modal hidden">
         <div class="panel" style="width: 90%; max-width: 400px;">
             <h3>创建公开聊天室</h3>
-            <input type="text" id="new-room-name" placeholder="房间名称" maxlength="20">
+            <input type="text" id="new-room-name" placeholder="房间名称 (最多20字)" maxlength="20">
             <input type="text" id="new-room-pass" placeholder="进房密码 (必填)" autocomplete="off">
             <div style="border-top:1px dashed #475569; margin:10px 0;"></div>
             <input type="password" id="admin-code" placeholder="管理员口令" autocomplete="off">
@@ -503,9 +507,13 @@ def create_public_room():
     clean_zombies()
     data = request.json
     if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
+    
+    name = validate_str(data.get('name'), 30, "Room")
+    if not name: return jsonify({'error': '名称不能为空'}), 400
+    
     uid = str(uuid.uuid4()).replace('-', '')
     conn = get_db()
-    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, last_active) VALUES (?,?,?,?,?,?)', (uid, data['name'], 1, data['salt'], time.time(), time.time()))
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, last_active) VALUES (?,?,?,?,?,?)', (uid, name, 1, data['salt'], time.time(), time.time()))
     conn.commit()
     conn.close()
     return jsonify({'id': uid})
@@ -636,8 +644,10 @@ def send_chat():
     data = request.json
     if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
     
+    sender_id = validate_str(data.get('sender_id'), 32, "anon")
+    
     conn = get_db()
-    conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), data.get('sender_id')))
+    conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), sender_id))
     conn.commit()
     conn.close()
     return jsonify({'status': 'ok'})
