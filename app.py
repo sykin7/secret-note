@@ -17,26 +17,19 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS secrets (
-            id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1
-        )
-    ''')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL
-        )
-    ''')
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS rooms (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            is_public INTEGER,
-            salt TEXT,
-            created_at REAL
-        )
-    ''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL, sender_id TEXT)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT, is_public INTEGER, salt TEXT, created_at REAL, owner_token TEXT, last_active REAL)''')
+    
+    try: conn.execute('ALTER TABLE secrets ADD COLUMN burn_mode INTEGER DEFAULT 1')
+    except: pass
+    try: conn.execute('ALTER TABLE chat_messages ADD COLUMN sender_id TEXT')
+    except: pass
+    try: conn.execute('ALTER TABLE rooms ADD COLUMN owner_token TEXT')
+    except: pass
+    try: conn.execute('ALTER TABLE rooms ADD COLUMN last_active REAL')
+    except: pass
+    
     conn.commit()
     conn.close()
 
@@ -101,7 +94,7 @@ HTML_LAYOUT = """
             <h2>加密传输系统</h2>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;">
                 <button onclick="showNoteCreate()" class="btn btn-primary">✉️ 发送私密笔记</button>
-                <button onclick="createChatRoom()" class="btn btn-secondary">💬 临时私聊(不公开)</button>
+                <button onclick="createTempRoom()" class="btn btn-secondary">💬 临时私聊 (房主在线)</button>
             </div>
             
             <h3>🔴 公开聊天大厅</h3>
@@ -111,10 +104,7 @@ HTML_LAYOUT = """
             <button onclick="showCreateRoomModal()" class="btn btn-success" style="width:100%; margin-top:10px;">➕ 创建公开房间 (管理员)</button>
             <button onclick="loadRooms()" class="btn btn-secondary btn-sm" style="width:100%; margin-top:10px;">↻ 刷新列表</button>
         </div>
-        
-        <div class="footer">
-            &copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">项目主页</a>
-        </div>
+        <div class="footer">&copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">项目主页</a></div>
     </div>
 
     <div id="create-room-modal" class="modal hidden">
@@ -123,7 +113,7 @@ HTML_LAYOUT = """
             <input type="text" id="new-room-name" placeholder="房间名称 (如: 周末派对)" maxlength="20">
             <input type="text" id="new-room-pass" placeholder="进房密码 (必填)" autocomplete="off">
             <div style="border-top:1px dashed #475569; margin:10px 0;"></div>
-            <input type="password" id="admin-code" placeholder="管理员口令 (仅站长可创建)" autocomplete="off">
+            <input type="password" id="admin-code" placeholder="管理员口令" autocomplete="off">
             <div style="display:flex; gap:10px;">
                 <button onclick="createPublicRoom()" class="btn btn-success">确认创建</button>
                 <button onclick="closeModal('create-room-modal')" class="btn btn-secondary">取消</button>
@@ -137,11 +127,7 @@ HTML_LAYOUT = """
                 <h2>创建私密笔记</h2>
                 <textarea id="content" placeholder="在此输入私密内容..." required style="height:120px"></textarea>
                 <div class="options">
-                    <select id="expiration" style="flex:1">
-                        <option value="1">1 小时后过期</option>
-                        <option value="24" selected>24 小时后过期</option>
-                        <option value="168">7 天后过期</option>
-                    </select>
+                    <select id="expiration" style="flex:1"><option value="1">1 小时后过期</option><option value="24" selected>24 小时后过期</option></select>
                 </div>
                 <div class="toggle-wrapper">
                     <span style="font-size:14px; color:#fff">🔥 阅后即焚</span>
@@ -175,20 +161,26 @@ HTML_LAYOUT = """
 
     <div id="chat-view" class="hidden">
         <div id="chat-header">
-            <div id="chat-title">🔒 加密聊天室</div>
-            <button onclick="location.href='/'" style="background:none; border:none; color:#cbd5e1; cursor:pointer; font-size:14px;">🚪 退出</button>
+            <div id="chat-title" style="font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">🔒 加密聊天室</div>
+            <div style="display:flex; gap:10px;">
+                <button id="copy-link-btn" onclick="copyRoomLink()" class="btn btn-success btn-sm" style="display:none;">🔗 复制邀请链接</button>
+                <button onclick="exitChat()" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:14px;">🚫 退出并销毁</button>
+            </div>
         </div>
         <div id="chat-box">
             <div class="system-msg">正在连接...</div>
         </div>
         <div id="chat-input-area">
-            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="打开文件中转站">📂 传文件</button>
+            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="打开文件中转站">📂</button>
             <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
-            <button onclick="sendChatMsg()" class="btn btn-primary" style="width:80px; margin:0;">发送</button>
+            <button onclick="sendChatMsg()" class="btn btn-primary" style="width:60px; margin:0;">发送</button>
         </div>
     </div>
 
     <script>
+        const myClientId = Math.random().toString(36).substring(2);
+        const path = window.location.pathname;
+
         async function getKey(password, salt) {
             const enc = new TextEncoder();
             const keyMaterial = await window.crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
@@ -220,8 +212,6 @@ HTML_LAYOUT = """
             return bytes.buffer;
         }
 
-        const path = window.location.pathname;
-        
         window.onload = function() {
             if (path.startsWith('/note/')) {
                 document.getElementById('home-view').classList.add('hidden');
@@ -238,94 +228,91 @@ HTML_LAYOUT = """
             }
         };
 
-        async function loadRooms() {
-            try {
-                const resp = await fetch('/api/rooms');
-                const rooms = await resp.json();
-                const listEl = document.getElementById('room-list');
-                listEl.innerHTML = '';
-                if (rooms.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:#64748b; padding:20px;">暂无公开房间</div>'; return; }
-                rooms.forEach(room => {
-                    const div = document.createElement('div');
-                    div.className = 'room-item';
-                    div.innerHTML = `
-                        <div class="room-info">
-                            <span class="room-name">${escapeHtml(room.name)}</span>
-                            <span class="room-time">${new Date(room.created_at * 1000).toLocaleString()}</span>
-                        </div>
-                        <button class="btn btn-primary btn-sm" onclick="joinRoom('${room.id}', '${room.name}', '${room.salt}')">加入</button>
-                    `;
-                    listEl.appendChild(div);
-                });
-            } catch (e) { console.error(e); }
-        }
-
-        function showCreateRoomModal() { document.getElementById('create-room-modal').classList.remove('hidden'); }
-        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
-        function escapeHtml(text) { const div = document.createElement('div'); div.innerText = text; return div.innerHTML; }
-
-        async function createPublicRoom() {
-            const name = document.getElementById('new-room-name').value.trim();
-            const pass = document.getElementById('new-room-pass').value;
-            const adminCode = document.getElementById('admin-code').value;
-            
-            if (!name || !pass) return alert('名称和密码不能为空');
-            if (!adminCode) return alert('请输入管理员口令');
-            
-            const salt = window.crypto.getRandomValues(new Uint8Array(16));
-            const saltBase64 = arrayBufferToBase64(salt);
-            const key = await getKey(pass, salt);
+        async function createTempRoom() {
+            const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
             const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
-            
-            const resp = await fetch('/api/room/create', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name: name, salt: saltBase64, admin_code: adminCode })
-            });
+            const resp = await fetch('/api/room/create_temp', { method: 'POST' });
             const data = await resp.json();
-            
-            if (data.error) return alert('创建失败: ' + data.error);
+            sessionStorage.setItem('owner_token_' + data.id, data.owner_token);
             window.location.href = '/chat/' + data.id + '#' + JSON.stringify(exportedKey);
         }
 
-        async function joinRoom(id, name, saltBase64) {
-            const pass = prompt(`请输入房间 "${name}" 的密码:`);
-            if (!pass) return;
-            try {
-                const salt = base64ToArrayBuffer(saltBase64);
-                const key = await getKey(pass, salt);
-                const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
-                window.location.href = '/chat/' + id + '#' + JSON.stringify(exportedKey);
-            } catch (e) { alert('错误'); }
-        }
+        let chatKey = null, lastMsgTime = 0, chatRoomId = null, heartbeatInterval = null;
 
-        let chatKey = null, lastMsgTime = 0, chatRoomId = null;
-        async function createChatRoom() {
-            const roomId = Math.random().toString(36).substring(2, 10);
-            const key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-            const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
-            window.location.href = window.location.origin + '/chat/' + roomId + '#' + JSON.stringify(exportedKey);
-        }
         async function initChat() {
             chatRoomId = path.split('/').pop();
+            const ownerToken = sessionStorage.getItem('owner_token_' + chatRoomId);
+            if (ownerToken) {
+                document.getElementById('copy-link-btn').style.display = 'block'; 
+                heartbeatInterval = setInterval(() => {
+                    fetch('/api/room/heartbeat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken })
+                    });
+                }, 3000);
+            }
+
             if (!window.location.hash) {
-                const pass = prompt("请输入房间密码:");
+                const pass = prompt("这是一个加密房间，请输入密码:");
                 if(pass) {
                     const resp = await fetch('/api/room/info/' + chatRoomId);
                     const data = await resp.json();
-                    if(data.error) return alert('房间不存在');
-                    const key = await getKey(pass, base64ToArrayBuffer(data.salt));
-                    chatKey = key;
+                    if(data.error) { alert('房间已销毁'); window.location.href='/'; return; }
+                    chatKey = await getKey(pass, base64ToArrayBuffer(data.salt));
                 } else { return appendChatMsg("缺少密钥", "system-msg"); }
             } else {
                 try {
                     const jwk = JSON.parse(decodeURIComponent(window.location.hash.substring(1)));
                     chatKey = await window.crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-                } catch(e) { return appendChatMsg("密钥解析错误", "system-msg"); }
+                } catch(e) { return appendChatMsg("密钥错误", "system-msg"); }
             }
-            appendChatMsg("已连接 (消息5分钟销毁)", "system-msg");
+            
+            appendChatMsg("已连接。消息5分钟销毁。", "system-msg");
+            if(ownerToken) appendChatMsg("【你是房主】你退出后房间将立即销毁。", "system-msg");
+            
             setInterval(pollMessages, 1500);
         }
+
+        async function pollMessages() {
+            if (!chatRoomId || !chatKey) return;
+            try {
+                const resp = await fetch(`/api/chat/poll/${chatRoomId}?last=${lastMsgTime}`);
+                const data = await resp.json();
+                
+                if (data.status === 'room_gone') {
+                    alert('房间已销毁 (房主已退出或超时)');
+                    window.location.href = '/';
+                    return;
+                }
+                
+                for (const msg of data) {
+                    if (msg.created_at > lastMsgTime) lastMsgTime = msg.created_at;
+                    if (msg.sender_id === myClientId) continue; 
+                    try { const text = await decryptData(msg.ciphertext, msg.iv, chatKey); appendChatMsg(text, 'other'); } catch (e) { }
+                }
+            } catch(e) {}
+        }
+
+        async function exitChat() {
+            if(confirm("确定退出吗？如果你是房主，房间将立即销毁。")) {
+                const ownerToken = sessionStorage.getItem('owner_token_' + chatRoomId);
+                if(ownerToken) {
+                    await fetch('/api/room/delete', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken })
+                    });
+                }
+                window.location.href = '/';
+            }
+        }
+
+        function copyRoomLink() {
+            const url = window.location.href;
+            navigator.clipboard.writeText(url).then(() => alert('邀请链接已复制！发送给好友即可开始聊天。'));
+        }
+
         async function sendChatMsg() {
             const input = document.getElementById('chat-msg-input');
             const text = input.value.trim();
@@ -333,18 +320,7 @@ HTML_LAYOUT = """
             input.value = ''; appendChatMsg(text, 'me');
             try {
                 const result = await encryptData(text, chatKey);
-                await fetch('/api/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, ciphertext: result.ciphertext, iv: result.iv }) });
-            } catch(e) {}
-        }
-        async function pollMessages() {
-            if (!chatRoomId || !chatKey) return;
-            try {
-                const resp = await fetch(`/api/chat/poll/${chatRoomId}?last=${lastMsgTime}`);
-                const msgs = await resp.json();
-                for (const msg of msgs) {
-                    if (msg.created_at > lastMsgTime) lastMsgTime = msg.created_at;
-                    try { const text = await decryptData(msg.ciphertext, msg.iv, chatKey); appendChatMsg(text, 'other'); } catch (e) { }
-                }
+                await fetch('/api/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, ciphertext: result.ciphertext, iv: result.iv, sender_id: myClientId }) });
             } catch(e) {}
         }
         function appendChatMsg(text, type) {
@@ -358,16 +334,63 @@ HTML_LAYOUT = """
             box.scrollTop = box.scrollHeight;
         }
 
-        function showNoteCreate() {
-            document.getElementById('home-view').classList.add('hidden');
-            document.getElementById('note-wrapper').classList.remove('hidden');
+        async function loadRooms() {
+            try {
+                const resp = await fetch('/api/rooms');
+                const rooms = await resp.json();
+                const listEl = document.getElementById('room-list');
+                listEl.innerHTML = '';
+                if (rooms.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:#64748b; padding:20px;">暂无公开房间</div>'; return; }
+                rooms.forEach(room => {
+                    const div = document.createElement('div');
+                    div.className = 'room-item';
+                    div.innerHTML = `<div class="room-info"><span class="room-name">${escapeHtml(room.name)}</span><span class="room-time">${new Date(room.created_at * 1000).toLocaleString()}</span></div><div style="display:flex; gap:5px;"><button class="btn btn-primary btn-sm" onclick="joinRoom('${room.id}', '${room.name}', '${room.salt}')">加入</button><button class="btn btn-danger btn-sm" style="padding:8px 10px;" title="管理员删除" onclick="deleteRoom('${room.id}')">×</button></div>`;
+                    listEl.appendChild(div);
+                });
+            } catch (e) {}
         }
+        async function createPublicRoom() {
+            const name = document.getElementById('new-room-name').value.trim();
+            const pass = document.getElementById('new-room-pass').value;
+            const adminCode = document.getElementById('admin-code').value;
+            if (!name || !pass || !adminCode) return alert('请填写完整');
+            const salt = window.crypto.getRandomValues(new Uint8Array(16));
+            const saltBase64 = arrayBufferToBase64(salt);
+            const key = await getKey(pass, salt);
+            const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
+            const resp = await fetch('/api/room/create_public', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name: name, salt: saltBase64, admin_code: adminCode }) });
+            const data = await resp.json();
+            if (data.error) return alert(data.error);
+            window.location.href = '/chat/' + data.id + '#' + JSON.stringify(exportedKey);
+        }
+        async function joinRoom(id, name, saltBase64) {
+            const pass = prompt(`请输入房间 "${name}" 的密码:`);
+            if (!pass) return;
+            try {
+                const salt = base64ToArrayBuffer(saltBase64);
+                const key = await getKey(pass, salt);
+                const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
+                window.location.href = '/chat/' + id + '#' + JSON.stringify(exportedKey);
+            } catch (e) { alert('错误'); }
+        }
+        async function deleteRoom(id) {
+            const code = prompt("管理员口令:");
+            if(!code) return;
+            const resp = await fetch('/api/room/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: id, admin_code: code }) });
+            const data = await resp.json();
+            if(data.error) alert(data.error); else loadRooms();
+        }
+
+        function showCreateRoomModal() { document.getElementById('create-room-modal').classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+        function showNoteCreate() { document.getElementById('home-view').classList.add('hidden'); document.getElementById('note-wrapper').classList.remove('hidden'); }
+        function escapeHtml(text) { const div = document.createElement('div'); div.innerText = text; return div.innerHTML; }
+        
         function initNoteView() {
             const isBurn = document.body.getAttribute('data-burn') === '1';
-            const desc = document.getElementById('view-desc');
             const title = document.getElementById('view-title');
-            if (isBurn) { title.innerText = "🔥 阅后即焚"; desc.innerText = "⚠️ 注意：此笔记阅读一次后将立即销毁！"; }
-            else { title.innerText = "📅 限时笔记"; desc.innerText = "此笔记在过期前可多次查看。"; }
+            if (isBurn) { title.innerText = "🔥 阅后即焚"; document.getElementById('view-desc').innerText = "⚠️ 注意：此笔记阅读一次后将立即销毁！"; }
+            else { title.innerText = "📅 限时笔记"; document.getElementById('view-desc').innerText = "此笔记在过期前可多次查看。"; }
             if (document.body.getAttribute('data-pass') === 'true') document.getElementById('pass-input-area').classList.remove('hidden');
         }
         async function createNote() {
@@ -419,8 +442,7 @@ HTML_LAYOUT = """
 """
 
 @app.route('/')
-def index():
-    return render_template_string(HTML_LAYOUT)
+def index(): return render_template_string(HTML_LAYOUT)
 
 @app.route('/note/<id>')
 def note_page(id):
@@ -434,8 +456,7 @@ def note_page(id):
     return render_template_string(HTML_LAYOUT.replace('<body>', f'<body data-pass="{has_pass}" data-burn="{is_burn}">'))
 
 @app.route('/chat/<room_id>')
-def chat_page(room_id):
-    return render_template_string(HTML_LAYOUT)
+def chat_page(room_id): return render_template_string(HTML_LAYOUT)
 
 @app.route('/api/rooms')
 def list_rooms():
@@ -445,17 +466,39 @@ def list_rooms():
     conn.close()
     return jsonify([dict(row) for row in rows])
 
-@app.route('/api/room/create', methods=['POST'])
-def create_room():
+@app.route('/api/room/create_public', methods=['POST'])
+def create_public_room():
     data = request.json
     if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
     uid = str(uuid.uuid4()).replace('-', '')
     conn = get_db()
-    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at) VALUES (?,?,?,?,?)', 
-                 (uid, data['name'], 1, data['salt'], time.time()))
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, last_active) VALUES (?,?,?,?,?,?)', (uid, data['name'], 1, data['salt'], time.time(), time.time()))
     conn.commit()
     conn.close()
     return jsonify({'id': uid})
+
+@app.route('/api/room/create_temp', methods=['POST'])
+def create_temp_room():
+    uid = str(uuid.uuid4()).replace('-', '')
+    owner_token = str(uuid.uuid4())
+    conn = get_db()
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, owner_token, last_active) VALUES (?,?,?,?,?,?,?)', 
+                 (uid, '临时房间', 0, '', time.time(), owner_token, time.time()))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': uid, 'owner_token': owner_token})
+
+@app.route('/api/room/heartbeat', methods=['POST'])
+def room_heartbeat():
+    data = request.json
+    room_id = data.get('room_id')
+    token = data.get('owner_token')
+    conn = get_db()
+    res = conn.execute('UPDATE rooms SET last_active = ? WHERE id = ? AND owner_token = ?', (time.time(), room_id, token))
+    conn.commit()
+    conn.close()
+    if res.rowcount == 0: return jsonify({'status': 'failed'}), 403
+    return jsonify({'status': 'ok'})
 
 @app.route('/api/room/info/<id>')
 def room_info(id):
@@ -464,6 +507,49 @@ def room_info(id):
     conn.close()
     if row: return jsonify(dict(row))
     return jsonify({'error': 'not found'})
+
+@app.route('/api/room/delete', methods=['POST'])
+def delete_room():
+    data = request.json
+    conn = get_db()
+    can_delete = False
+    if data.get('admin_code') == ADMIN_CODE: can_delete = True
+    elif data.get('owner_token'):
+        row = conn.execute('SELECT 1 FROM rooms WHERE id = ? AND owner_token = ?', (data['room_id'], data['owner_token'])).fetchone()
+        if row: can_delete = True
+    
+    if can_delete:
+        conn.execute('DELETE FROM rooms WHERE id = ?', (data['room_id'],))
+        conn.execute('DELETE FROM chat_messages WHERE room_id = ?', (data['room_id'],))
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'ok'})
+    conn.close()
+    return jsonify({'error': '无权删除'}), 403
+
+@app.route('/api/chat/poll/<room_id>')
+def poll_chat(room_id):
+    conn = get_db()
+    room = conn.execute('SELECT is_public, last_active FROM rooms WHERE id = ?', (room_id,)).fetchone()
+    if not room:
+        conn.close()
+        return jsonify({'status': 'room_gone'})
+    
+    if room['is_public'] == 0:
+        if time.time() - room['last_active'] > 8:
+            conn.execute('DELETE FROM rooms WHERE id = ?', (room_id,))
+            conn.execute('DELETE FROM chat_messages WHERE room_id = ?', (room_id,))
+            conn.commit()
+            conn.close()
+            return jsonify({'status': 'room_gone'})
+
+    last_time = float(request.args.get('last', 0))
+    now = time.time()
+    rows = conn.execute('SELECT ciphertext, iv, created_at, sender_id FROM chat_messages WHERE room_id = ? AND created_at > ?', (room_id, last_time)).fetchall()
+    conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now - 300,))
+    conn.commit()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
 
 @app.route('/api/note/create', methods=['POST'])
 def create_note_api():
@@ -482,7 +568,7 @@ def read_note_api(id):
     conn = get_db()
     row = conn.execute('SELECT * FROM secrets WHERE id = ?', (id,)).fetchone()
     if row:
-        if row['burn_mode'] is None or row['burn_mode'] == 1: conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
+        if row['burn_mode'] == 1: conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
         else:
             if datetime.datetime.strptime(row['expire_at'], '%Y-%m-%d %H:%M:%S.%f') < datetime.datetime.now():
                 conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
@@ -498,21 +584,10 @@ def read_note_api(id):
 def send_chat():
     data = request.json
     conn = get_db()
-    conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at) VALUES (?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time()))
+    conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), data.get('sender_id')))
     conn.commit()
     conn.close()
     return jsonify({'status': 'ok'})
-
-@app.route('/api/chat/poll/<room_id>')
-def poll_chat(room_id):
-    last_time = float(request.args.get('last', 0))
-    now = time.time()
-    conn = get_db()
-    rows = conn.execute('SELECT ciphertext, iv, created_at FROM chat_messages WHERE room_id = ? AND created_at > ?', (room_id, last_time)).fetchall()
-    conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now - 300,))
-    conn.commit()
-    conn.close()
-    return jsonify([dict(row) for row in rows])
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8787)
