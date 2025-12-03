@@ -15,6 +15,7 @@ DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
 
 CREATION_LIMITS = {}
+ADMIN_LIMITS = {}
 MESSAGE_LIMITS = {}
 
 def get_db():
@@ -45,11 +46,11 @@ init_db()
 def cleanup_memory_cache():
     now = time.time()
     for ip in list(CREATION_LIMITS.keys()):
-        if now - CREATION_LIMITS[ip] > 60:
-            del CREATION_LIMITS[ip]
+        if now - CREATION_LIMITS[ip] > 60: del CREATION_LIMITS[ip]
+    for ip in list(ADMIN_LIMITS.keys()):
+        if now - ADMIN_LIMITS[ip] > 5: del ADMIN_LIMITS[ip]
     for ip in list(MESSAGE_LIMITS.keys()):
-        if now - MESSAGE_LIMITS[ip] > 5:
-            del MESSAGE_LIMITS[ip]
+        if now - MESSAGE_LIMITS[ip] > 5: del MESSAGE_LIMITS[ip]
 
 def clean_zombies():
     try:
@@ -65,8 +66,7 @@ def clean_zombies():
     except: pass
 
 def random_clean():
-    if random.random() < 0.01:
-        clean_zombies()
+    if random.random() < 0.01: clean_zombies()
 
 def validate_str(val, max_len=1000, default=""):
     if not isinstance(val, str): return default
@@ -205,7 +205,7 @@ HTML_LAYOUT = """
         <div id="chat-box"><div class="system-msg">正在连接...</div></div>
         <div id="chat-input-area">
             <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件/图片">📂</button>
-            <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
+            <input type="text" id="chat-msg-input" placeholder="输入消息或图片链接..." onkeypress="if(event.keyCode==13) sendChatMsg()">
             <button onclick="sendChatMsg()" class="btn btn-primary" style="width:60px; margin:0;">发送</button>
         </div>
     </div>
