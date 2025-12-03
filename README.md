@@ -2,7 +2,7 @@
 # Encrypted Transfer System (端到端加密传输系统)
 
 一个基于 Web 的**零知识（Zero-Knowledge）**隐私信息传输平台。
-集成了“**阅后即焚私密笔记**”与“**实时加密聊天室**”两大功能。
+集成了“**阅后即焚私密笔记**”、“**实时加密聊天室**”与“**公开聊天大厅**”三大核心板块。
 
 所有数据均在**本地浏览器端完成高强度加密**（AES-GCM），服务器仅负责存储密文。这意味着**即便是服务器管理员，也无法窥探您的任何内容**。
 
@@ -14,14 +14,16 @@
 * **无痕存储**：无后台、无日志、无用户系统。
 
 ### 📝 私密笔记 (Secure Notes)
-* **阅后即焚**：链接被访问一次后，立即物理销毁，不可恢复。
+* **灵活销毁**：支持“阅后即焚”（阅读一次即删）或“限时销毁”（过期前可多次阅读）。
 * **密码保护**：可选设置访问密码，为您的秘密加第二道锁。
-* **自动过期**：支持设置 1小时 / 24小时 后自动销毁（即使未被阅读）。
+* **自动过期**：支持设置 1小时 / 24小时 / 7天 后自动物理删除。
 
 ### 💬 实时聊天 (Ephemeral Chat)
-* **即时通讯**：创建一个临时聊天室，邀请好友实时对话。
-* **极速销毁**：消息在服务器仅保留 **10秒**，随后物理删除，确保记录不留存。
-* **全链路加密**：每一条消息都经过独立加密，刷新页面即丢失所有记录。
+* **双模式支持**：
+    * **临时私聊**：一键创建私密房间，链接即密钥，不在大厅列表显示。
+    * **公开大厅**：管理员可创建公开显示的房间，需凭密码进入。
+* **延时销毁**：消息在服务器保留 **5分钟**，保证对话连贯性，随后物理删除。
+* **文件传输**：集成文件中转站功能，支持在聊天中快速分享文件。
 
 ## 🚀 快速部署
 
@@ -33,7 +35,8 @@
 
 ```bash
 # 1. 拉取并运行 (请替换 <your-image-name> 为你的镜像名)
-docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
+# 可选：通过 -e ADMIN_PASSWORD="yourpassword" 设置管理员口令
+docker run -d -p 8787:8787 --name secure-transfer -e ADMIN_PASSWORD="admin888" <your-image-name>
 ````
 
 启动后，访问 `http://localhost:8787` (或你的域名) 即可使用。
@@ -45,8 +48,8 @@ docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
 1.  **克隆仓库**
 
     ```bash
-    git clone [https://github.com/your-username/your-repo.git](https://github.com/your-username/your-repo.git)
-    cd your-repo
+    git clone [https://github.com/sykin7/secret-note.git](https://github.com/sykin7/secret-note.git)
+    cd secret-note
     ```
 
 2.  **安装依赖** (Python 3.9+)
@@ -58,6 +61,8 @@ docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
 3.  **运行**
 
     ```bash
+    # Linux/Mac 设置管理员密码 (默认 admin888)
+    export ADMIN_PASSWORD="mysecretpass"
     python app.py
     ```
 
@@ -65,17 +70,15 @@ docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
 
 ### 发送私密笔记
 
-1.  输入敏感信息（如密码、API Key）。
-2.  (可选) 设置销毁时间或访问密码。
+1.  输入敏感信息。
+2.  选择是否开启 **“🔥 阅后即焚”** 开关。
 3.  点击生成，**复制生成的链接**发送给对方。
-      * *注意：如果设置了密码，请通过其他渠道将密码告知对方。*
 
 ### 发起加密聊天
 
-1.  点击首页的“以此设备创建聊天室”。
-2.  将浏览器地址栏中的**完整链接**发给好友。
-3.  双方在线即可实时聊天。
-      * *注意：聊天记录不保存，请勿刷新页面。*
+  * **临时私聊**：点击首页“临时私聊”，将浏览器链接发给好友即可（隐蔽性高）。
+  * **公开大厅**：点击“创建公开房间”（需输入管理员口令），房间将显示在大厅列表，访客凭密码进入。
+  * **传文件**：在聊天输入框左侧点击 **“📂 传文件”** 按钮，上传后发送链接。
 
 ## 🛠️ 技术栈
 
@@ -89,6 +92,7 @@ docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
 | 变量名 | 默认值 | 描述 |
 | :--- | :--- | :--- |
 | `PORT` | `8787` | 应用监听端口 |
+| `ADMIN_PASSWORD` | `admin888` | 创建公开大厅房间的管理员口令 |
 
 ## ⚠️ 安全免责声明
 
@@ -102,7 +106,7 @@ docker run -d -p 8787:8787 --name secure-transfer <your-image-name>
 
 ## License
 
-MIT License.
+GPL-3.0 license.
 
 ```
 ```
