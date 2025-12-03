@@ -205,7 +205,7 @@ HTML_LAYOUT = """
         <div id="chat-header">
             <div id="chat-title" style="font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">🔒 加密聊天室</div>
             <div style="display:flex; gap:10px;">
-                <button id="copy-link-btn" onclick="copyRoomLink()" class="btn btn-success btn-sm" style="display:none;">🔗 复制链接</button>
+                <button onclick="copyRoomLink()" class="btn btn-success btn-sm">🔗 复制链接</button>
                 <button onclick="exitChat()" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:14px;">🚫 退出</button>
             </div>
         </div>
@@ -521,10 +521,8 @@ def create_public_room():
     clean_zombies()
     data = request.json
     if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
-    
     name = validate_str(data.get('name'), 30, "Room")
     if not name: return jsonify({'error': '名称不能为空'}), 400
-    
     uid = str(uuid.uuid4()).replace('-', '')
     conn = get_db()
     conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, last_active) VALUES (?,?,?,?,?,?)', (uid, name, 1, data['salt'], time.time(), time.time()))
@@ -540,7 +538,6 @@ def create_temp_room():
     last = CREATION_LIMITS.get(ip, 0)
     if now - last < 60: return jsonify({'error': '每分钟限建一个房间'}), 429
     CREATION_LIMITS[ip] = now
-    
     uid = str(uuid.uuid4()).replace('-', '')
     owner_token = str(uuid.uuid4())
     conn = get_db()
@@ -579,7 +576,6 @@ def delete_room():
     elif data.get('owner_token'):
         row = conn.execute('SELECT 1 FROM rooms WHERE id = ? AND owner_token = ?', (data['room_id'], data['owner_token'])).fetchone()
         if row: can_delete = True
-    
     if can_delete:
         conn.execute('DELETE FROM rooms WHERE id = ?', (data['room_id'],))
         conn.execute('DELETE FROM chat_messages WHERE room_id = ?', (data['room_id'],))
@@ -597,7 +593,6 @@ def poll_chat(room_id):
     if not room:
         conn.close()
         return jsonify({'status': 'room_gone'})
-    
     if room['is_public'] == 0:
         if time.time() - room['last_active'] > 8:
             conn.execute('DELETE FROM rooms WHERE id = ?', (room_id,))
@@ -605,7 +600,6 @@ def poll_chat(room_id):
             conn.commit()
             conn.close()
             return jsonify({'status': 'room_gone'})
-
     last_time = float(request.args.get('last', 0))
     now = time.time()
     rows = conn.execute('SELECT ciphertext, iv, created_at, sender_id FROM chat_messages WHERE room_id = ? AND created_at > ?', (room_id, last_time)).fetchall()
@@ -619,7 +613,6 @@ def create_note_api():
     clean_zombies()
     data = request.json
     if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
-    
     uid = str(uuid.uuid4()).replace('-', '')
     expire = datetime.datetime.now() + datetime.timedelta(hours=int(data.get('expire_hours', 24)))
     burn_mode = int(data.get('burn_mode', 1))
@@ -654,12 +647,9 @@ def send_chat():
     last = MESSAGE_LIMITS.get(ip, 0)
     if now - last < 1.0: return jsonify({'error': '发送太快'}), 429
     MESSAGE_LIMITS[ip] = now
-    
     data = request.json
     if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
-    
     sender_id = validate_str(data.get('sender_id'), 32, "anon")
-    
     conn = get_db()
     conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), sender_id))
     conn.commit()
