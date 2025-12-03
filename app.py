@@ -4,9 +4,11 @@ import uuid
 import datetime
 import time
 import os
+import json
 
 app = Flask(__name__)
 DB_NAME = 'storage.db'
+ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -17,7 +19,7 @@ def init_db():
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS secrets (
-            id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME
+            id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1
         )
     ''')
     conn.execute('''
@@ -26,10 +28,15 @@ def init_db():
             room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL
         )
     ''')
-    try:
-        conn.execute('ALTER TABLE secrets ADD COLUMN burn_mode INTEGER DEFAULT 1')
-    except Exception:
-        pass
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS rooms (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            is_public INTEGER,
+            salt TEXT,
+            created_at REAL
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -45,18 +52,25 @@ HTML_LAYOUT = """
     <style>
         :root { --bg: #0f172a; --panel: #1e293b; --text: #e2e8f0; --primary: #3b82f6; --danger: #ef4444; --success: #10b981; --msg-me: #2563eb; --msg-other: #334155; }
         body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        .container { padding: 20px; max-width: 500px; margin: auto; width: 100%; box-sizing: border-box; }
-        .panel { background: var(--panel); padding: 2rem; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
-        h2 { margin-top: 0; text-align: center; color: #fff; }
+        .container { padding: 20px; max-width: 600px; margin: auto; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; max-height: 100vh; }
+        .panel { background: var(--panel); padding: 2rem; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); margin-bottom: 20px; }
+        h2 { margin-top: 0; text-align: center; color: #fff; font-size: 1.5rem; }
+        h3 { color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 10px; margin-top: 0; }
         textarea, input, select { width: 100%; background: #334155; border: 1px solid #475569; color: white; padding: 12px; border-radius: 8px; margin: 10px 0; box-sizing: border-box; font-size: 16px; outline: none; }
-        .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s; }
+        .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s; text-align: center; display: inline-block; text-decoration: none; box-sizing: border-box; }
         .btn-primary { background: var(--primary); color: white; }
         .btn-danger { background: var(--danger); color: white; }
         .btn-success { background: var(--success); color: white; }
         .btn-secondary { background: #334155; color: #cbd5e1; }
+        .btn-sm { padding: 8px 15px; font-size: 14px; width: auto; margin-top: 0; }
         .options { display: flex; gap: 10px; align-items: center; }
         .hidden { display: none !important; }
         .result-box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px dashed #475569; word-break: break-all; color: var(--primary); margin: 15px 0; font-family: monospace; }
+        .room-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .room-item { background: #334155; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .room-info { display: flex; flex-direction: column; }
+        .room-name { font-weight: bold; color: white; }
+        .room-time { font-size: 12px; color: #94a3b8; margin-top: 4px; }
         .toggle-wrapper { display: flex; align-items: center; justify-content: space-between; background: #334155; padding: 10px; border-radius: 8px; margin-top: 10px; border: 1px solid #475569; }
         .switch { position: relative; display: inline-block; width: 50px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
@@ -64,11 +78,9 @@ HTML_LAYOUT = """
         .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
         input:checked + .slider { background-color: var(--success); }
         input:checked + .slider:before { transform: translateX(26px); }
-        #chat-view { display: flex; flex-direction: column; height: 100%; max-width: 800px; margin: 0 auto; width: 100%; background: var(--bg); }
+        #chat-view { display: flex; flex-direction: column; height: 100%; max-width: 800px; margin: 0 auto; width: 100%; background: var(--bg); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100; }
         #chat-header { padding: 15px; background: var(--panel); border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-        #chat-status { font-size: 12px; color: var(--success); display: flex; align-items: center; gap: 5px; }
-        .dot { width: 8px; height: 8px; background: var(--success); border-radius: 50%; display: inline-block; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        #chat-title { font-weight: bold; color: white; }
         #chat-box { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
         .msg-row { display: flex; width: 100%; }
         .msg-row.me { justify-content: flex-end; }
@@ -78,19 +90,43 @@ HTML_LAYOUT = """
         .system-msg { text-align: center; color: #64748b; font-size: 12px; margin: 10px 0; }
         #chat-input-area { padding: 15px; background: var(--panel); border-top: 1px solid #334155; display: flex; gap: 10px; }
         #chat-msg-input { margin: 0; height: 50px; }
-        .footer { text-align: center; margin-top: 30px; font-size: 12px; color: #64748b; }
+        .footer { text-align: center; margin-top: 20px; font-size: 12px; color: #64748b; padding-bottom: 20px; }
         .footer a { color: #64748b; text-decoration: none; border-bottom: 1px dashed #64748b; }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 50; }
     </style>
 </head>
 <body>
     <div id="home-view" class="container">
-        <div class="panel" style="text-align: center;">
-            <h2>请选择传输模式</h2>
-            <p style="color:#94a3b8; font-size:14px; margin-bottom: 30px;">端到端加密保护 | 服务器不存原文</p>
-            <button onclick="showNoteCreate()" class="btn btn-primary">✉️ 发送私密笔记</button>
-            <button onclick="createChatRoom()" class="btn btn-success">💬 创建聊天室</button>
-            <div class="footer">
-                &copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">加密传输系统</a>
+        <div class="panel">
+            <h2>加密传输系统</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px;">
+                <button onclick="showNoteCreate()" class="btn btn-primary">✉️ 发送私密笔记</button>
+                <button onclick="createChatRoom()" class="btn btn-secondary">💬 临时私聊(不公开)</button>
+            </div>
+            
+            <h3>🔴 公开聊天大厅</h3>
+            <div id="room-list" class="room-list">
+                <div style="text-align:center; color:#64748b; padding:20px;">加载中...</div>
+            </div>
+            <button onclick="showCreateRoomModal()" class="btn btn-success" style="width:100%; margin-top:10px;">➕ 创建公开房间 (管理员)</button>
+            <button onclick="loadRooms()" class="btn btn-secondary btn-sm" style="width:100%; margin-top:10px;">↻ 刷新列表</button>
+        </div>
+        
+        <div class="footer">
+            &copy; 2025 <a href="https://github.com/sykin7/secret-note" target="_blank">项目主页</a>
+        </div>
+    </div>
+
+    <div id="create-room-modal" class="modal hidden">
+        <div class="panel" style="width: 90%; max-width: 400px;">
+            <h3>创建公开聊天室</h3>
+            <input type="text" id="new-room-name" placeholder="房间名称 (如: 周末派对)" maxlength="20">
+            <input type="text" id="new-room-pass" placeholder="进房密码 (必填)" autocomplete="off">
+            <div style="border-top:1px dashed #475569; margin:10px 0;"></div>
+            <input type="password" id="admin-code" placeholder="管理员口令 (仅站长可创建)" autocomplete="off">
+            <div style="display:flex; gap:10px;">
+                <button onclick="createPublicRoom()" class="btn btn-success">确认创建</button>
+                <button onclick="closeModal('create-room-modal')" class="btn btn-secondary">取消</button>
             </div>
         </div>
     </div>
@@ -108,33 +144,26 @@ HTML_LAYOUT = """
                     </select>
                 </div>
                 <div class="toggle-wrapper">
-                    <span style="font-size:14px; color:#fff">🔥 阅后即焚 (阅读一次后立即删除)</span>
-                    <label class="switch">
-                        <input type="checkbox" id="burn-toggle" checked>
-                        <span class="slider"></span>
-                    </label>
+                    <span style="font-size:14px; color:#fff">🔥 阅后即焚</span>
+                    <label class="switch"><input type="checkbox" id="burn-toggle" checked><span class="slider"></span></label>
                 </div>
                 <input type="text" id="password" placeholder="设置访问密码（可选）" autocomplete="off">
                 <button onclick="createNote()" class="btn btn-primary" id="create-btn">生成加密链接</button>
-                <button onclick="location.reload()" class="btn btn-secondary">返回</button>
+                <button onclick="location.reload()" class="btn btn-secondary">返回大厅</button>
             </div>
-
             <div id="result-view" class="hidden">
                 <h2>链接已生成</h2>
                 <div class="result-box" id="share-link"></div>
                 <p id="password-reminder" class="hidden" style="color:#f59e0b; font-size:13px; text-align:center;">⚠️ 已设置密码，请务必告知对方！</p>
                 <button onclick="location.href='/'" class="btn btn-secondary">返回首页</button>
             </div>
-
             <div id="decrypt-view" class="hidden">
                 <h2 id="view-title" style="color:var(--danger)">私密笔记</h2>
                 <p id="view-desc" style="text-align:center;">正在请求解密...</p>
-                <div id="pass-input-area" class="hidden">
-                    <input type="text" id="decrypt-pass" placeholder="输入密码" autocomplete="off">
-                </div>
+                <div id="pass-input-area" class="hidden"><input type="text" id="decrypt-pass" placeholder="输入密码" autocomplete="off"></div>
                 <button onclick="fetchAndDecryptNote()" class="btn btn-danger" id="reveal-btn">立即查看</button>
+                <button onclick="location.href='/'" class="btn btn-secondary">返回首页</button>
             </div>
-
             <div id="content-view" class="hidden">
                 <h2>笔记内容</h2>
                 <textarea id="decrypted-content" readonly style="height:150px"></textarea>
@@ -146,14 +175,14 @@ HTML_LAYOUT = """
 
     <div id="chat-view" class="hidden">
         <div id="chat-header">
-            <div style="font-weight:bold; color:white;">🔒 加密聊天室</div>
-            <div id="chat-status"><span class="dot"></span> 连接安全</div>
-            <button onclick="location.href='/'" style="background:none; border:none; color:#94a3b8; cursor:pointer;">退出</button>
+            <div id="chat-title">🔒 加密聊天室</div>
+            <button onclick="location.href='/'" style="background:none; border:none; color:#cbd5e1; cursor:pointer; font-size:14px;">🚪 退出</button>
         </div>
         <div id="chat-box">
-            <div class="system-msg">正在建立通道... 消息10秒自动销毁</div>
+            <div class="system-msg">正在连接...</div>
         </div>
         <div id="chat-input-area">
+            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="打开文件中转站">📂 传文件</button>
             <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
             <button onclick="sendChatMsg()" class="btn btn-primary" style="width:80px; margin:0;">发送</button>
         </div>
@@ -192,108 +221,82 @@ HTML_LAYOUT = """
         }
 
         const path = window.location.pathname;
-        if (path.startsWith('/note/')) {
-            document.getElementById('home-view').classList.add('hidden');
-            document.getElementById('note-wrapper').classList.remove('hidden');
-            document.getElementById('create-view').classList.add('hidden');
-            document.getElementById('decrypt-view').classList.remove('hidden');
-            
-            const isBurn = document.body.getAttribute('data-burn') === '1';
-            const desc = document.getElementById('view-desc');
-            const title = document.getElementById('view-title');
-            if (isBurn) {
-                title.innerText = "🔥 阅后即焚";
-                desc.innerText = "⚠️ 注意：此笔记阅读一次后将立即销毁！";
-            } else {
-                title.innerText = "📅 限时笔记";
-                desc.innerText = "此笔记在过期前可多次查看。";
-            }
-
-            if (document.body.getAttribute('data-pass') === 'true') {
-                document.getElementById('pass-input-area').classList.remove('hidden');
-            }
-        } else if (path.startsWith('/chat/')) {
-            document.getElementById('home-view').classList.add('hidden');
-            document.getElementById('chat-view').classList.remove('hidden');
-            initChat();
-        }
-
-        function showNoteCreate() {
-            document.getElementById('home-view').classList.add('hidden');
-            document.getElementById('note-wrapper').classList.remove('hidden');
-        }
-
-        async function createNote() {
-            const text = document.getElementById('content').value;
-            if (!text) return;
-            const btn = document.getElementById('create-btn'); btn.innerText = '处理中...'; btn.disabled = true;
-            
-            try {
-                const password = document.getElementById('password').value;
-                let key, salt;
-                if (password) {
-                    salt = window.crypto.getRandomValues(new Uint8Array(16));
-                    key = await getKey(password, salt);
-                } else {
-                    key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-                    salt = null;
-                }
-                
-                const result = await encryptData(text, key);
-                const exportKey = password ? null : await window.crypto.subtle.exportKey("jwk", key);
-                const isBurn = document.getElementById('burn-toggle').checked;
-
-                const resp = await fetch('/api/note/create', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        ciphertext: result.ciphertext, iv: result.iv,
-                        salt: salt ? arrayBufferToBase64(salt) : null,
-                        expire_hours: document.getElementById('expiration').value,
-                        burn_mode: isBurn ? 1 : 0
-                    })
-                });
-                const data = await resp.json();
-                
-                let link = window.location.origin + '/note/' + data.id;
-                if (!password) link += '#' + JSON.stringify(exportKey);
-                else document.getElementById('password-reminder').classList.remove('hidden');
-
+        
+        window.onload = function() {
+            if (path.startsWith('/note/')) {
+                document.getElementById('home-view').classList.add('hidden');
+                document.getElementById('note-wrapper').classList.remove('hidden');
                 document.getElementById('create-view').classList.add('hidden');
-                document.getElementById('result-view').classList.remove('hidden');
-                document.getElementById('share-link').innerText = link;
-            } catch(e) { alert('错误: ' + e); btn.disabled = false; }
+                document.getElementById('decrypt-view').classList.remove('hidden');
+                initNoteView();
+            } else if (path.startsWith('/chat/')) {
+                document.getElementById('home-view').classList.add('hidden');
+                document.getElementById('chat-view').classList.remove('hidden');
+                initChat();
+            } else {
+                loadRooms();
+            }
+        };
+
+        async function loadRooms() {
+            try {
+                const resp = await fetch('/api/rooms');
+                const rooms = await resp.json();
+                const listEl = document.getElementById('room-list');
+                listEl.innerHTML = '';
+                if (rooms.length === 0) { listEl.innerHTML = '<div style="text-align:center; color:#64748b; padding:20px;">暂无公开房间</div>'; return; }
+                rooms.forEach(room => {
+                    const div = document.createElement('div');
+                    div.className = 'room-item';
+                    div.innerHTML = `
+                        <div class="room-info">
+                            <span class="room-name">${escapeHtml(room.name)}</span>
+                            <span class="room-time">${new Date(room.created_at * 1000).toLocaleString()}</span>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="joinRoom('${room.id}', '${room.name}', '${room.salt}')">加入</button>
+                    `;
+                    listEl.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
         }
 
-        async function fetchAndDecryptNote() {
-            const id = path.split('/').pop();
+        function showCreateRoomModal() { document.getElementById('create-room-modal').classList.remove('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+        function escapeHtml(text) { const div = document.createElement('div'); div.innerText = text; return div.innerHTML; }
+
+        async function createPublicRoom() {
+            const name = document.getElementById('new-room-name').value.trim();
+            const pass = document.getElementById('new-room-pass').value;
+            const adminCode = document.getElementById('admin-code').value;
+            
+            if (!name || !pass) return alert('名称和密码不能为空');
+            if (!adminCode) return alert('请输入管理员口令');
+            
+            const salt = window.crypto.getRandomValues(new Uint8Array(16));
+            const saltBase64 = arrayBufferToBase64(salt);
+            const key = await getKey(pass, salt);
+            const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
+            
+            const resp = await fetch('/api/room/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name: name, salt: saltBase64, admin_code: adminCode })
+            });
+            const data = await resp.json();
+            
+            if (data.error) return alert('创建失败: ' + data.error);
+            window.location.href = '/chat/' + data.id + '#' + JSON.stringify(exportedKey);
+        }
+
+        async function joinRoom(id, name, saltBase64) {
+            const pass = prompt(`请输入房间 "${name}" 的密码:`);
+            if (!pass) return;
             try {
-                const resp = await fetch('/api/note/read/' + id, { method: 'POST' });
-                const data = await resp.json();
-                if (data.error) return alert(data.error);
-
-                let key;
-                if (data.salt) {
-                    const pwd = document.getElementById('decrypt-pass').value;
-                    if (!pwd) return alert('请输入密码');
-                    key = await getKey(pwd, base64ToArrayBuffer(data.salt));
-                } else {
-                    key = await window.crypto.subtle.importKey("jwk", JSON.parse(decodeURIComponent(window.location.hash.substring(1))), { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-                }
-
-                const text = await decryptData(data.ciphertext, data.iv, key);
-                document.getElementById('decrypt-view').classList.add('hidden');
-                document.getElementById('content-view').classList.remove('hidden');
-                document.getElementById('decrypted-content').value = text;
-                
-                const status = document.getElementById('burn-status');
-                if (document.body.getAttribute('data-burn') === '1') {
-                    status.innerText = "🔥 笔记已销毁，无法再次访问。";
-                } else {
-                    status.innerText = "✅ 笔记暂未销毁，过期前可再次访问。";
-                    status.style.color = "#10b981";
-                }
-            } catch(e) { alert('解密失败，密码错误或链接无效'); }
+                const salt = base64ToArrayBuffer(saltBase64);
+                const key = await getKey(pass, salt);
+                const exportedKey = await window.crypto.subtle.exportKey("jwk", key);
+                window.location.href = '/chat/' + id + '#' + JSON.stringify(exportedKey);
+            } catch (e) { alert('错误'); }
         }
 
         let chatKey = null, lastMsgTime = 0, chatRoomId = null;
@@ -305,13 +308,23 @@ HTML_LAYOUT = """
         }
         async function initChat() {
             chatRoomId = path.split('/').pop();
-            if (!window.location.hash) return appendChatMsg("缺少密钥", "system-msg");
-            try {
-                const jwk = JSON.parse(decodeURIComponent(window.location.hash.substring(1)));
-                chatKey = await window.crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
-                appendChatMsg("聊天室已就绪，链接即密钥。", "system-msg");
-                setInterval(pollMessages, 1500);
-            } catch (e) { appendChatMsg("密钥错误", "system-msg"); }
+            if (!window.location.hash) {
+                const pass = prompt("请输入房间密码:");
+                if(pass) {
+                    const resp = await fetch('/api/room/info/' + chatRoomId);
+                    const data = await resp.json();
+                    if(data.error) return alert('房间不存在');
+                    const key = await getKey(pass, base64ToArrayBuffer(data.salt));
+                    chatKey = key;
+                } else { return appendChatMsg("缺少密钥", "system-msg"); }
+            } else {
+                try {
+                    const jwk = JSON.parse(decodeURIComponent(window.location.hash.substring(1)));
+                    chatKey = await window.crypto.subtle.importKey("jwk", jwk, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+                } catch(e) { return appendChatMsg("密钥解析错误", "system-msg"); }
+            }
+            appendChatMsg("已连接 (消息5分钟销毁)", "system-msg");
+            setInterval(pollMessages, 1500);
         }
         async function sendChatMsg() {
             const input = document.getElementById('chat-msg-input');
@@ -324,13 +337,13 @@ HTML_LAYOUT = """
             } catch(e) {}
         }
         async function pollMessages() {
-            if (!chatRoomId) return;
+            if (!chatRoomId || !chatKey) return;
             try {
                 const resp = await fetch(`/api/chat/poll/${chatRoomId}?last=${lastMsgTime}`);
                 const msgs = await resp.json();
                 for (const msg of msgs) {
                     if (msg.created_at > lastMsgTime) lastMsgTime = msg.created_at;
-                    try { const text = await decryptData(msg.ciphertext, msg.iv, chatKey); appendChatMsg(text, 'other'); } catch (e) {}
+                    try { const text = await decryptData(msg.ciphertext, msg.iv, chatKey); appendChatMsg(text, 'other'); } catch (e) { }
                 }
             } catch(e) {}
         }
@@ -343,6 +356,62 @@ HTML_LAYOUT = """
                 const bubble = document.createElement('div'); bubble.className = 'msg-bubble'; bubble.innerText = text; row.appendChild(bubble); box.appendChild(row);
             }
             box.scrollTop = box.scrollHeight;
+        }
+
+        function showNoteCreate() {
+            document.getElementById('home-view').classList.add('hidden');
+            document.getElementById('note-wrapper').classList.remove('hidden');
+        }
+        function initNoteView() {
+            const isBurn = document.body.getAttribute('data-burn') === '1';
+            const desc = document.getElementById('view-desc');
+            const title = document.getElementById('view-title');
+            if (isBurn) { title.innerText = "🔥 阅后即焚"; desc.innerText = "⚠️ 注意：此笔记阅读一次后将立即销毁！"; }
+            else { title.innerText = "📅 限时笔记"; desc.innerText = "此笔记在过期前可多次查看。"; }
+            if (document.body.getAttribute('data-pass') === 'true') document.getElementById('pass-input-area').classList.remove('hidden');
+        }
+        async function createNote() {
+            const text = document.getElementById('content').value;
+            if (!text) return;
+            const btn = document.getElementById('create-btn'); btn.innerText = '处理中...'; btn.disabled = true;
+            try {
+                const password = document.getElementById('password').value;
+                let key, salt;
+                if (password) { salt = window.crypto.getRandomValues(new Uint8Array(16)); key = await getKey(password, salt); }
+                else { key = await window.crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]); salt = null; }
+                const result = await encryptData(text, key);
+                const exportKey = password ? null : await window.crypto.subtle.exportKey("jwk", key);
+                const isBurn = document.getElementById('burn-toggle').checked;
+                const resp = await fetch('/api/note/create', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ ciphertext: result.ciphertext, iv: result.iv, salt: salt ? arrayBufferToBase64(salt) : null, expire_hours: document.getElementById('expiration').value, burn_mode: isBurn ? 1 : 0 }) });
+                const data = await resp.json();
+                let link = window.location.origin + '/note/' + data.id;
+                if (!password) link += '#' + JSON.stringify(exportKey);
+                else document.getElementById('password-reminder').classList.remove('hidden');
+                document.getElementById('create-view').classList.add('hidden');
+                document.getElementById('result-view').classList.remove('hidden');
+                document.getElementById('share-link').innerText = link;
+            } catch(e) { alert('错误: ' + e); btn.disabled = false; }
+        }
+        async function fetchAndDecryptNote() {
+            const id = path.split('/').pop();
+            try {
+                const resp = await fetch('/api/note/read/' + id, { method: 'POST' });
+                const data = await resp.json();
+                if (data.error) return alert(data.error);
+                let key;
+                if (data.salt) {
+                    const pwd = document.getElementById('decrypt-pass').value;
+                    if (!pwd) return alert('请输入密码');
+                    key = await getKey(pwd, base64ToArrayBuffer(data.salt));
+                } else { key = await window.crypto.subtle.importKey("jwk", JSON.parse(decodeURIComponent(window.location.hash.substring(1))), { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]); }
+                const text = await decryptData(data.ciphertext, data.iv, key);
+                document.getElementById('decrypt-view').classList.add('hidden');
+                document.getElementById('content-view').classList.remove('hidden');
+                document.getElementById('decrypted-content').value = text;
+                const status = document.getElementById('burn-status');
+                if (document.body.getAttribute('data-burn') === '1') status.innerText = "🔥 笔记已销毁，无法再次访问。";
+                else { status.innerText = "✅ 笔记暂未销毁，过期前可再次访问。"; status.style.color = "#10b981"; }
+            } catch(e) { alert('解密失败，密码错误或链接无效'); }
         }
     </script>
 </body>
@@ -368,6 +437,34 @@ def note_page(id):
 def chat_page(room_id):
     return render_template_string(HTML_LAYOUT)
 
+@app.route('/api/rooms')
+def list_rooms():
+    conn = get_db()
+    since = time.time() - 86400 
+    rows = conn.execute('SELECT id, name, created_at, salt FROM rooms WHERE is_public = 1 AND created_at > ? ORDER BY created_at DESC', (since,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
+
+@app.route('/api/room/create', methods=['POST'])
+def create_room():
+    data = request.json
+    if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
+    uid = str(uuid.uuid4()).replace('-', '')
+    conn = get_db()
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at) VALUES (?,?,?,?,?)', 
+                 (uid, data['name'], 1, data['salt'], time.time()))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': uid})
+
+@app.route('/api/room/info/<id>')
+def room_info(id):
+    conn = get_db()
+    row = conn.execute('SELECT salt FROM rooms WHERE id = ?', (id,)).fetchone()
+    conn.close()
+    if row: return jsonify(dict(row))
+    return jsonify({'error': 'not found'})
+
 @app.route('/api/note/create', methods=['POST'])
 def create_note_api():
     data = request.json
@@ -375,8 +472,7 @@ def create_note_api():
     expire = datetime.datetime.now() + datetime.timedelta(hours=int(data.get('expire_hours', 24)))
     burn_mode = int(data.get('burn_mode', 1))
     conn = get_db()
-    conn.execute('INSERT INTO secrets (id, ciphertext, iv, salt, expire_at, burn_mode) VALUES (?,?,?,?,?,?)',
-                 (uid, data['ciphertext'], data['iv'], data['salt'], expire, burn_mode))
+    conn.execute('INSERT INTO secrets (id, ciphertext, iv, salt, expire_at, burn_mode) VALUES (?,?,?,?,?,?)', (uid, data['ciphertext'], data['iv'], data['salt'], expire, burn_mode))
     conn.commit()
     conn.close()
     return jsonify({'id': uid})
@@ -386,8 +482,7 @@ def read_note_api(id):
     conn = get_db()
     row = conn.execute('SELECT * FROM secrets WHERE id = ?', (id,)).fetchone()
     if row:
-        if row['burn_mode'] is None or row['burn_mode'] == 1:
-            conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
+        if row['burn_mode'] is None or row['burn_mode'] == 1: conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
         else:
             if datetime.datetime.strptime(row['expire_at'], '%Y-%m-%d %H:%M:%S.%f') < datetime.datetime.now():
                 conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
@@ -414,7 +509,7 @@ def poll_chat(room_id):
     now = time.time()
     conn = get_db()
     rows = conn.execute('SELECT ciphertext, iv, created_at FROM chat_messages WHERE room_id = ? AND created_at > ?', (room_id, last_time)).fetchall()
-    conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now - 10,))
+    conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now - 300,))
     conn.commit()
     conn.close()
     return jsonify([dict(row) for row in rows])
