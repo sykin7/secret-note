@@ -9,19 +9,22 @@ import re
 import random
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 
+
 DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
+
 CREATION_LIMITS = {}
 MESSAGE_LIMITS = {}
-MAX_PAYLOAD_SIZE = 50000 
 
 def get_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     conn = get_db()
+    conn.execute('PRAGMA journal_mode=WAL;')
     conn.execute('''CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, ciphertext TEXT, iv TEXT, salt TEXT, expire_at DATETIME, burn_mode INTEGER DEFAULT 1)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT, ciphertext TEXT, iv TEXT, created_at REAL, sender_id TEXT)''')
     conn.execute('''CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, name TEXT, is_public INTEGER, salt TEXT, created_at REAL, owner_token TEXT, last_active REAL)''')
@@ -38,14 +41,31 @@ def init_db():
 
 init_db()
 
+def cleanup_memory_cache():
+    now = time.time()
+    for ip in list(CREATION_LIMITS.keys()):
+        if now - CREATION_LIMITS[ip] > 60:
+            del CREATION_LIMITS[ip]
+    for ip in list(MESSAGE_LIMITS.keys()):
+        if now - MESSAGE_LIMITS[ip] > 5:
+            del MESSAGE_LIMITS[ip]
+
 def clean_zombies():
     try:
         conn = get_db()
-        now = datetime.datetime.now()
-        conn.execute('DELETE FROM secrets WHERE expire_at < ?', (now,))
+        now_dt = datetime.datetime.now()
+        now_ts = time.time()
+        conn.execute('DELETE FROM secrets WHERE expire_at < ?', (now_dt,))
+        conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now_ts - 300,))
+        conn.execute('DELETE FROM rooms WHERE is_public = 0 AND last_active < ?', (now_ts - 600,))
+        cleanup_memory_cache()
         conn.commit()
         conn.close()
     except: pass
+
+def random_clean():
+    if random.random() < 0.01:
+        clean_zombies()
 
 HTML_LAYOUT = """
 <!DOCTYPE html>
@@ -314,7 +334,7 @@ HTML_LAYOUT = """
                 const result = await encryptData(text, chatKey);
                 await fetch('/api/chat/send', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, ciphertext: result.ciphertext, iv: result.iv, sender_id: myClientId }) });
             } catch(e) {
-                if(e.message && e.message.includes('413')) alert('内容太长，请分段发送');
+                if(e.message && e.message.includes('413')) alert('内容太长');
                 else if(e.message && e.message.includes('429')) alert('说话太快了，请慢一点');
             }
         }
@@ -549,6 +569,7 @@ def delete_room():
 
 @app.route('/api/chat/poll/<room_id>')
 def poll_chat(room_id):
+    random_clean()
     conn = get_db()
     room = conn.execute('SELECT is_public, last_active FROM rooms WHERE id = ?', (room_id,)).fetchone()
     if not room:
@@ -575,7 +596,7 @@ def poll_chat(room_id):
 def create_note_api():
     clean_zombies()
     data = request.json
-    if len(data.get('ciphertext', '')) > MAX_PAYLOAD_SIZE: return jsonify({'error': '内容过长'}), 413
+    if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
     
     uid = str(uuid.uuid4()).replace('-', '')
     expire = datetime.datetime.now() + datetime.timedelta(hours=int(data.get('expire_hours', 24)))
@@ -605,6 +626,7 @@ def read_note_api(id):
 
 @app.route('/api/chat/send', methods=['POST'])
 def send_chat():
+    random_clean()
     ip = request.headers.get('X-Forwarded-For', request.remote_addr)
     now = time.time()
     last = MESSAGE_LIMITS.get(ip, 0)
@@ -612,7 +634,7 @@ def send_chat():
     MESSAGE_LIMITS[ip] = now
     
     data = request.json
-    if len(data.get('ciphertext', '')) > MAX_PAYLOAD_SIZE: return jsonify({'error': '内容过长'}), 413
+    if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
     
     conn = get_db()
     conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), data.get('sender_id')))
