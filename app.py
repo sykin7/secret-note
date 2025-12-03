@@ -15,6 +15,7 @@ DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
 
 CREATION_LIMITS = {}
+ADMIN_LIMITS = {}
 MESSAGE_LIMITS = {}
 
 def get_db():
@@ -45,11 +46,11 @@ init_db()
 def cleanup_memory_cache():
     now = time.time()
     for ip in list(CREATION_LIMITS.keys()):
-        if now - CREATION_LIMITS[ip] > 60:
-            del CREATION_LIMITS[ip]
+        if now - CREATION_LIMITS[ip] > 60: del CREATION_LIMITS[ip]
+    for ip in list(ADMIN_LIMITS.keys()):
+        if now - ADMIN_LIMITS[ip] > 5: del ADMIN_LIMITS[ip]
     for ip in list(MESSAGE_LIMITS.keys()):
-        if now - MESSAGE_LIMITS[ip] > 5:
-            del MESSAGE_LIMITS[ip]
+        if now - MESSAGE_LIMITS[ip] > 5: del MESSAGE_LIMITS[ip]
 
 def clean_zombies():
     try:
@@ -65,8 +66,7 @@ def clean_zombies():
     except: pass
 
 def random_clean():
-    if random.random() < 0.01:
-        clean_zombies()
+    if random.random() < 0.01: clean_zombies()
 
 def validate_str(val, max_len=1000, default=""):
     if not isinstance(val, str): return default
@@ -95,7 +95,7 @@ HTML_LAYOUT = """
         .btn-sm { padding: 8px 15px; font-size: 14px; width: auto; margin-top: 0; }
         .options { display: flex; gap: 10px; align-items: center; }
         .hidden { display: none !important; }
-        .result-box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px dashed #475569; word-break: break-all; color: var(--primary); margin: 15px 0; font-family: monospace; }
+        .result-box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px dashed #475569; word-break: break-all; color: var(--primary); margin: 15px 0; font-family: monospace; display: none; }
         .room-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
         .room-item { background: #334155; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
         .room-info { display: flex; flex-direction: column; }
@@ -117,6 +117,9 @@ HTML_LAYOUT = """
         .msg-bubble { max-width: 70%; padding: 10px 15px; border-radius: 12px; font-size: 15px; line-height: 1.5; word-wrap: break-word; position: relative; }
         .me .msg-bubble { background: var(--msg-me); color: white; border-bottom-right-radius: 2px; }
         .other .msg-bubble { background: var(--msg-other); color: #e2e8f0; border-bottom-left-radius: 2px; }
+        .media-placeholder { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; text-align: center; cursor: pointer; border: 1px dashed #64748b; transition: 0.2s; display: inline-block; width: 100%; box-sizing: border-box; }
+        .media-placeholder:hover { background: rgba(0,0,0,0.4); border-color: var(--primary); }
+        .msg-bubble img, .msg-bubble video { max-width: 100%; border-radius: 8px; margin-top: 5px; display: block; }
         .msg-bubble a { color: #60a5fa; text-decoration: underline; }
         .system-msg { text-align: center; color: #64748b; font-size: 12px; margin: 10px 0; }
         #chat-input-area { padding: 15px; background: var(--panel); border-top: 1px solid #334155; display: flex; gap: 10px; }
@@ -175,6 +178,10 @@ HTML_LAYOUT = """
             <div id="result-view" class="hidden">
                 <h2>链接已生成</h2>
                 <div class="result-box" id="share-link"></div>
+                <div style="text-align:center; margin: 20px 0;">
+                    <div style="margin-bottom:10px; color:#94a3b8; font-size:14px;">加密链接已就绪</div>
+                    <button onclick="copyNoteLink()" class="btn btn-success" style="width: auto; padding: 10px 20px;">🔗 一键复制私密链接</button>
+                </div>
                 <p id="password-reminder" class="hidden" style="color:#f59e0b; font-size:13px; text-align:center;">⚠️ 已设置密码，请务必告知对方！</p>
                 <button onclick="location.href='/'" class="btn btn-secondary">返回首页</button>
             </div>
@@ -275,7 +282,6 @@ HTML_LAYOUT = """
             chatRoomId = path.split('/').pop();
             const ownerToken = sessionStorage.getItem('owner_token_' + chatRoomId);
             if (ownerToken) {
-                document.getElementById('copy-link-btn').style.display = 'block'; 
                 heartbeatInterval = setInterval(() => {
                     fetch('/api/room/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ room_id: chatRoomId, owner_token: ownerToken }) });
                 }, 3000);
@@ -327,6 +333,11 @@ HTML_LAYOUT = """
             navigator.clipboard.writeText(window.location.href).then(() => alert('邀请链接已复制'));
         }
 
+        function copyNoteLink() {
+            const link = document.getElementById('share-link').innerText;
+            navigator.clipboard.writeText(link).then(() => alert('私密链接已复制，请发送给对方。'));
+        }
+
         async function sendChatMsg() {
             const input = document.getElementById('chat-msg-input');
             const text = input.value.trim();
@@ -351,7 +362,17 @@ HTML_LAYOUT = """
                 
                 let safeText = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
                 const urlRegex = /(https?:\/\/[^"'\s]+)/g;
-                bubble.innerHTML = safeText.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+                
+                const imgRegex = /(https?:\/\/[^"'\s]+\.(?:png|jpg|jpeg|gif|webp))/i;
+                const videoRegex = /(https?:\/\/[^"'\s]+\.(?:mp4|webm|ogg))/i;
+
+                if (imgRegex.test(text)) {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<div class="media-placeholder" onclick="this.outerHTML=\'<img src=\\'$1\\'>\'">🖼️ 点击加载图片 (隐私保护)</div>');
+                } else if (videoRegex.test(text)) {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<div class="media-placeholder" onclick="this.outerHTML=\'<video controls src=\\'$1\\'></video>\'">▶️ 点击播放视频 (隐私保护)</div>');
+                } else {
+                    bubble.innerHTML = safeText.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+                }
                 
                 row.appendChild(bubble); box.appendChild(row);
             }
@@ -465,6 +486,179 @@ HTML_LAYOUT = """
 """
 
 @app.route('/')
+def index(): return render_template_string(HTML_LAYOUT)
+
+@app.route('/note/<id>')
+def note_page(id):
+    conn = get_db()
+    row = conn.execute('SELECT salt, expire_at, burn_mode FROM secrets WHERE id = ?', (id,)).fetchone()
+    conn.close()
+    if not row or datetime.datetime.strptime(row['expire_at'], '%Y-%m-%d %H:%M:%S.%f') < datetime.datetime.now():
+        return render_template_string(HTML_LAYOUT.replace('<body>', '<body onload="alert(\'笔记不存在或已过期\');location.href=\'/\'">'))
+    has_pass = 'true' if row['salt'] else 'false'
+    is_burn = '1' if row['burn_mode'] is None or row['burn_mode'] == 1 else '0'
+    return render_template_string(HTML_LAYOUT.replace('<body>', f'<body data-pass="{has_pass}" data-burn="{is_burn}">'))
+
+@app.route('/chat/<room_id>')
+def chat_page(room_id): return render_template_string(HTML_LAYOUT)
+
+@app.route('/api/rooms')
+def list_rooms():
+    clean_zombies()
+    conn = get_db()
+    since = time.time() - 86400 
+    rows = conn.execute('SELECT id, name, created_at, salt FROM rooms WHERE is_public = 1 AND created_at > ? ORDER BY created_at DESC', (since,)).fetchall()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
+
+@app.route('/api/room/create_public', methods=['POST'])
+def create_public_room():
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = time.time()
+    last = ADMIN_LIMITS.get(ip, 0)
+    if now - last < 3: return jsonify({'error': '操作太快'}), 429
+    ADMIN_LIMITS[ip] = now
+    clean_zombies()
+    data = request.json
+    if data.get('admin_code') != ADMIN_CODE: return jsonify({'error': '管理员口令错误'}), 403
+    name = validate_str(data.get('name'), 30, "Room")
+    if not name: return jsonify({'error': '名称不能为空'}), 400
+    uid = str(uuid.uuid4()).replace('-', '')
+    conn = get_db()
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, last_active) VALUES (?,?,?,?,?,?)', (uid, name, 1, data['salt'], time.time(), time.time()))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': uid})
+
+@app.route('/api/room/create_temp', methods=['POST'])
+def create_temp_room():
+    clean_zombies()
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = time.time()
+    last = CREATION_LIMITS.get(ip, 0)
+    if now - last < 60: return jsonify({'error': '每分钟限建一个房间'}), 429
+    CREATION_LIMITS[ip] = now
+    uid = str(uuid.uuid4()).replace('-', '')
+    owner_token = str(uuid.uuid4())
+    conn = get_db()
+    conn.execute('INSERT INTO rooms (id, name, is_public, salt, created_at, owner_token, last_active) VALUES (?,?,?,?,?,?,?)', 
+                 (uid, '临时房间', 0, '', time.time(), owner_token, time.time()))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': uid, 'owner_token': owner_token})
+
+@app.route('/api/room/heartbeat', methods=['POST'])
+def room_heartbeat():
+    data = request.json
+    room_id = data.get('room_id')
+    token = data.get('owner_token')
+    conn = get_db()
+    res = conn.execute('UPDATE rooms SET last_active = ? WHERE id = ? AND owner_token = ?', (time.time(), room_id, token))
+    conn.commit()
+    conn.close()
+    if res.rowcount == 0: return jsonify({'status': 'failed'}), 403
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/room/info/<id>')
+def room_info(id):
+    conn = get_db()
+    row = conn.execute('SELECT salt FROM rooms WHERE id = ?', (id,)).fetchone()
+    conn.close()
+    if row: return jsonify(dict(row))
+    return jsonify({'error': 'not found'})
+
+@app.route('/api/room/delete', methods=['POST'])
+def delete_room():
+    data = request.json
+    conn = get_db()
+    can_delete = False
+    if data.get('admin_code') == ADMIN_CODE: can_delete = True
+    elif data.get('owner_token'):
+        row = conn.execute('SELECT 1 FROM rooms WHERE id = ? AND owner_token = ?', (data['room_id'], data['owner_token'])).fetchone()
+        if row: can_delete = True
+    if can_delete:
+        conn.execute('DELETE FROM rooms WHERE id = ?', (data['room_id'],))
+        conn.execute('DELETE FROM chat_messages WHERE room_id = ?', (data['room_id'],))
+        conn.commit()
+        conn.close()
+        return jsonify({'status': 'ok'})
+    conn.close()
+    return jsonify({'error': '无权删除'}), 403
+
+@app.route('/api/chat/poll/<room_id>')
+def poll_chat(room_id):
+    random_clean()
+    conn = get_db()
+    room = conn.execute('SELECT is_public, last_active FROM rooms WHERE id = ?', (room_id,)).fetchone()
+    if not room:
+        conn.close()
+        return jsonify({'status': 'room_gone'})
+    if room['is_public'] == 0:
+        if time.time() - room['last_active'] > 8:
+            conn.execute('DELETE FROM rooms WHERE id = ?', (room_id,))
+            conn.execute('DELETE FROM chat_messages WHERE room_id = ?', (room_id,))
+            conn.commit()
+            conn.close()
+            return jsonify({'status': 'room_gone'})
+    last_time = float(request.args.get('last', 0))
+    now = time.time()
+    rows = conn.execute('SELECT ciphertext, iv, created_at, sender_id FROM chat_messages WHERE room_id = ? AND created_at > ?', (room_id, last_time)).fetchall()
+    conn.execute('DELETE FROM chat_messages WHERE created_at < ?', (now - 300,))
+    conn.commit()
+    conn.close()
+    return jsonify([dict(row) for row in rows])
+
+@app.route('/api/note/create', methods=['POST'])
+def create_note_api():
+    clean_zombies()
+    data = request.json
+    if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
+    uid = str(uuid.uuid4()).replace('-', '')
+    expire = datetime.datetime.now() + datetime.timedelta(hours=int(data.get('expire_hours', 24)))
+    burn_mode = int(data.get('burn_mode', 1))
+    conn = get_db()
+    conn.execute('INSERT INTO secrets (id, ciphertext, iv, salt, expire_at, burn_mode) VALUES (?,?,?,?,?,?)', (uid, data['ciphertext'], data['iv'], data['salt'], expire, burn_mode))
+    conn.commit()
+    conn.close()
+    return jsonify({'id': uid})
+
+@app.route('/api/note/read/<id>', methods=['POST'])
+def read_note_api(id):
+    conn = get_db()
+    row = conn.execute('SELECT * FROM secrets WHERE id = ?', (id,)).fetchone()
+    if row:
+        if row['burn_mode'] == 1: conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
+        else:
+            if datetime.datetime.strptime(row['expire_at'], '%Y-%m-%d %H:%M:%S.%f') < datetime.datetime.now():
+                conn.execute('DELETE FROM secrets WHERE id = ?', (id,))
+                conn.commit()
+                conn.close()
+                return jsonify({'error': 'Expired'}), 410
+        conn.commit()
+    conn.close()
+    if not row: return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ciphertext': row['ciphertext'], 'iv': row['iv'], 'salt': row['salt']})
+
+@app.route('/api/chat/send', methods=['POST'])
+def send_chat():
+    random_clean()
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    now = time.time()
+    last = MESSAGE_LIMITS.get(ip, 0)
+    if now - last < 1.0: return jsonify({'error': '发送太快'}), 429
+    MESSAGE_LIMITS[ip] = now
+    data = request.json
+    if len(data.get('ciphertext', '')) > 20000: return jsonify({'error': '内容过长'}), 413
+    sender_id = validate_str(data.get('sender_id'), 32, "anon")
+    conn = get_db()
+    conn.execute('INSERT INTO chat_messages (room_id, ciphertext, iv, created_at, sender_id) VALUES (?,?,?,?,?)', (data['room_id'], data['ciphertext'], data['iv'], time.time(), sender_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'ok'})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8787)
+    @app.route('/')
 def index(): return render_template_string(HTML_LAYOUT)
 
 @app.route('/note/<id>')
