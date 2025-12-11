@@ -71,7 +71,6 @@ def validate_str(val, max_len=1000, default=""):
     if not isinstance(val, str): return default
     return val[:max_len]
 
-# 注意这里加了 r 前缀，保护 JS 代码中的反斜杠不被 Python 转义
 HTML_LAYOUT = r"""
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -211,7 +210,7 @@ HTML_LAYOUT = r"""
         </div>
         <div id="chat-box"><div class="system-msg">正在连接...</div></div>
         <div id="chat-input-area">
-            <button onclick="window.open('https://wj.iuiu.netlib.re/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件">📂</button>
+            <button onclick="window.open('https://wj.agsy.hidns.vip/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件">📂</button>
             <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
             <button onclick="sendChatMsg()" class="btn btn-primary" style="width:60px; margin:0;">发送</button>
         </div>
@@ -221,7 +220,6 @@ HTML_LAYOUT = r"""
         const myClientId = Math.random().toString(36).substring(2);
         const path = window.location.pathname;
 
-        // 全局函数：处理媒体加载
         window.loadMedia = function(el, url, type) {
             if (type === 'img') {
                 el.outerHTML = '<img src="' + url + '">';
