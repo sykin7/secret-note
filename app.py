@@ -12,6 +12,7 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024
 
 DB_NAME = 'storage.db'
 ADMIN_CODE = os.environ.get('ADMIN_PASSWORD', 'admin888')
+FILE_URL = os.environ.get('FILE_URL', 'https://wj.agsy.hidns.vip/')
 
 CREATION_LIMITS = {}
 ADMIN_LIMITS = {}
@@ -210,7 +211,7 @@ HTML_LAYOUT = r"""
         </div>
         <div id="chat-box"><div class="system-msg">正在连接...</div></div>
         <div id="chat-input-area">
-            <button onclick="window.open('https://wj.agsy.hidns.vip/', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件">📂</button>
+            <button onclick="window.open('__FILE_URL__', '_blank')" class="btn btn-secondary" style="width:auto; padding:0 15px; margin:0; margin-right:8px;" title="传文件">📂</button>
             <input type="text" id="chat-msg-input" placeholder="输入消息..." onkeypress="if(event.keyCode==13) sendChatMsg()">
             <button onclick="sendChatMsg()" class="btn btn-primary" style="width:60px; margin:0;">发送</button>
         </div>
@@ -492,6 +493,8 @@ HTML_LAYOUT = r"""
 </body>
 </html>
 """
+
+HTML_LAYOUT = HTML_LAYOUT.replace('__FILE_URL__', FILE_URL)
 
 @app.route('/')
 def index(): return HTML_LAYOUT
